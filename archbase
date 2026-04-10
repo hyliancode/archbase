@@ -1,0 +1,169 @@
+#!/bin/bash
+
+warning() { echo "[WARNING] ${1}"; }
+error() { echo "[ERROR] ${1}"; exit 1; }
+confirm() { read -p "${1} (y/N): "; [[ "${REPLY}" =~ [yY] ]]; }
+
+setfont ter-132b || warning "Could not set font"
+
+verify_system() {
+    [[ -f /usr/bin/pacstrap ]] || error "Not in arch live env"
+    [[ "$(id -u)" == "0" ]] || error "Not running as root"
+    [[ "$(cat /sys/firmware/efi/fw_platform_size)" == "64" ]] || error "Not booted in a supported mode (x64 UEFI)"
+    ping -qn -c 1 ping.archlinux.org &> /dev/null || error "Not internet connection"
+    [[ "$(timedatectl show -p NTPSynchronized --value)" == "yes" ]] || error "System clock is not synchronized"
+}
+
+get_user_input() {
+    local _username _password _password_confirm
+    local _compname # damn linux for making 'hostname' a command
+    local _timezone_label _timezone _timezones
+    local _disk _partition_suffix
+
+    while true; do
+        read -p "Username: " _username
+        [[ -n "${_username}" ]] || { warning "Cannot be blank"; continue; }
+        [[ "${_username}" =~ ^[a-zA-Z0-9]+$ ]] || { warning "No special chars"; continue; }
+        break
+    done
+
+    while true; do
+        read -p "Password: " _password
+        [[ -n "${_password}" ]] || { warning "Cannot be blank"; continue; }
+        read -p "Confirm: " _password_confirm
+        [[ "${_password}" == "${_password_confirm}" ]] || { warning "Passwords did not match"; continue; }
+        break
+    done
+
+    while true; do
+        read -p "Computer Name: " _compname
+        [[ -n "${_compname}" ]] || { warning "Cannot be blank"; continue; }
+        [[ "${_compname}" =~ ^[a-zA-Z0-9]+$ ]] || { warning "No special chars"; continue; }
+        break
+    done
+
+    declare -A _timezones=(
+        ["US/Central"]="America/Chicago"
+        ["US/Eastern"]="America/New_York"
+        ["US/Mountain"]="America/Denver"
+        ["US/Pacific"]="America/Los_Angeles"
+        ["UTC"]="Etc/UTC"
+        ["Central Europe"]="Europe/Prague"
+        ["Eastern Europe"]="Europe/Helsinki"
+        ["Western Europe"]="Europe/Berlin"
+        ["Japan"]="Asia/Tokyo"
+    )
+    select _timezone_label in "${!_timezones[@]}"; do
+        [[ -n "${_timezone_label}" ]] || { warning "Must select a timezone"; continue; }
+        _timezone="${_timezones[${_timezone_label}]}"
+        confirm "Timezone: ${_timezone}?" || exit 1
+        break
+    done
+
+    select _disk in $(lsblk -npdo name); do
+        [[ -n "${_disk}" ]] || { warning "Must select a drive"; continue; }
+        [[ -b "${_disk}" ]] || error "Drive '${_disk}' is not valid"
+        [[ "${_disk}" =~ "nvme" ]] && _partition_suffix="p" || _partition_suffix=""
+        confirm "Destroy data on '${_disk}'?" || exit 1
+        break
+    done
+
+    export username="${_username}"
+    export password="${_password}"
+    export compname="${_compname}"
+    export timezone="${_timezone}"
+    export disk="${_disk}"
+    export boot_partition="${_disk}${_partition_suffix}1"
+    export root_partition="${_disk}${_partition_suffix}2"
+}
+
+prepare_disk() {
+    mountpoint -q /mnt && { umount -R /mnt || error "Failed to unmount all in '/mnt'"; }
+    sgdisk -Z "${disk}" || error "Failed to zap disk: '${disk}'"
+    sgdisk -a 2048 -o "${disk}" || error "Failed to set gpt alignment: '${disk}'"
+    sgdisk -n 1::+1GiB --typecode=1:ef00 --change-name=1:'EFIBOOT' "${disk}" || error "Failed to create partition 1: '${disk}'"
+    sgdisk -n 2::-0 --typecode=2:8300 --change-name=2:'ROOT' "${disk}" || error "Failed to create partition 2: '${disk}'"
+    partprobe "${disk}" || error "Failed to run 'partprobe': '${disk}'"
+    mkfs.fat -F 32 "${boot_partition}" || error "Failed to format boot partition: '${boot_partition}'"
+    mkfs.ext4 "${root_partition}" || error "Failed to format root partition: '${root_partition}'"
+    mount "${root_partition}" /mnt || error "Failed to mount '${root_partition}' to '/mnt'"
+    mount --mkdir "${boot_partition}" /mnt/boot || error "Failed to mount '${boot_partition}' to '/mnt/boot'"
+}
+
+install_arch() {
+    pacman -Sy --noconfirm archlinux-keyring || error "Failed to reinstall 'archlinux-keyring'"
+    pacman -S --noconfirm --needed reflector || error "Failed to install 'reflector'"
+    reflector_args=(
+        --completion-percent 100
+        --country "United States"
+        --latest 6
+        --protocol https
+        --verbose
+        --sort rate
+        --save /etc/pacman.d/mirrorlist
+    )
+    reflector "${reflector_args[@]}" || error "Failed to run 'reflector'"
+    sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf || warning "Failed to enable parallel downloads in 'pacman.conf'"
+    pacstrap_pkgs=(
+        amd-ucode
+        base
+        base-devel
+        curl
+        efibootmgr
+        git
+        grub
+        less
+        linux
+        linux-firmware
+        man-db
+        man-pages
+        nano
+        networkmanager
+        sudo
+    )
+    pacstrap -K /mnt "${pacstrap_pkgs[@]}" || error "Failed to install packages with 'pacstrap'"
+}
+
+configure_arch() {
+	genfstab -U /mnt >> /mnt/etc/fstab || error "Failed to generate fstab"
+	arch-chroot /mnt /bin/bash -s <<- EOF
+        error() { echo "[ARCH-CHROOT] [ERROR] ${1}"; exit 1; }
+
+		# time
+		ln -sf /usr/share/zoneinfo/"${timezone}" /etc/localtime || error "Failed to set timezone"
+		hwclock --systohc || error "Failed to set hardware clock"
+
+		# localization
+		sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen || error "Failed to uncomment 'en_US.UTF-8' in 'locale.gen'"
+		locale-gen || error "Failed to generate locales"
+		echo "LANG=en_US.UTF-8" > /etc/locale.conf || error "Failed to set 'LANG' in 'locale.conf'"
+
+		# network config
+		echo "${compname}" > /etc/hostname || error "Failed to set hostname"
+		systemctl enable NetworkManager.service || error "Failed to enable 'NetworkManager.service'"
+
+		# install bootloader
+		grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB || error "Failed to install GRUB"
+		sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="[^"]*/& quiet /' /etc/default/grub || error "Failed to modify GRUB configuration"
+		grub-mkconfig -o /boot/grub/grub.cfg || error "Failed to generate GRUB configuration"
+		efibootmgr -c -d "${disk}" -p 1 -L "Arch Linux" -l /EFI/GRUB/grubx64.efi || error "Failed to create EFI boot entry"
+
+		# setup user account
+		useradd -m -G wheel -s /bin/bash "${username}" || error "Failed to create user '${username}'"
+		echo "${username}:${password}" | chpasswd || error "Failed to set password for user '${username}'"
+		sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf || error "Failed to enable parallel downloads in 'pacman.conf'"
+		sed -i 's/^#Color/Color\nILoveCandy/' /etc/pacman.conf || error "Failed to enable easter egg colors in 'pacman.conf'"
+		sed -i '/#\[multilib\]/,/#Include = \/etc\/pacman.d\/mirrorlist/ s/^#//' /etc/pacman.conf || error "Failed to uncomment 'multilib' section in 'pacman.conf'"
+		sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers || error "Failed to uncomment 'wheel' group in 'sudoers'"
+		sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers || error "Failed to uncomment 'wheel' group in 'sudoers'"
+		exit
+	EOF
+}
+
+verify_system
+get_user_input
+prepare_disk
+install_arch
+configure_arch
+
+confirm "Installation complete. Reboot now?" && reboot
