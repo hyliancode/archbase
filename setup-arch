@@ -1,0 +1,16 @@
+#!/bin/bash
+
+error() { echo "[ERROR] ${1}" >&2; exit 1; }
+
+sudo pacman -Sy || error "Failed to synchronize package databases"
+
+sudo pacman -S --noconfirm --needed -- git base-devel  || error "Failed to install dependencies"
+if ! command -v yay 1> /dev/null; then
+	git clone https://aur.archlinux.org/yay /tmp/yay || error "Failed to clone 'yay' repository"
+	(cd /tmp/yay && makepkg -si --noconfirm) || error "Failed to build and install 'yay'"
+fi
+
+xargs -r -a "pacman.pkgs" sudo pacman -S --noconfirm --needed -- || error "Failed to install packages from 'pacman.pkgs'"
+xargs -r -a "yay.pkgs" yay -S --noconfirm --needed -- || error "Failed to install packages from 'yay.pkgs'"
+
+echo "Complete."
