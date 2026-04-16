@@ -1,0 +1,26 @@
+#!/bin/bash
+
+error() { echo "[ERROR] ${1}"; exit 1; }
+warning() { echo "[WARNING] ${1}"; }
+
+install_yay() {
+    git clone https://aur.archlinux.org/yay /tmp/yay || { warning "Failed to clone 'yay' repository"; return 1; }
+    (cd /tmp/yay && makepkg -si --noconfirm) || { warning "Failed to build and install 'yay'"; return 1; }
+    return 0
+}
+
+sudo pacman -Sy || error "Failed to synchronize package databases"
+
+if [[ -f pacman.pkgs ]]; then
+    sudo pacman -S --noconfirm --needed - < pacman.pkgs || error "Failed to install packages from 'pacman.pkgs'"
+else
+    warning "No 'pacman.pkgs' file found. Skipping 'pacman' package installation."
+fi  
+
+if ! command -v yay; then
+    if install_yay; then
+        yay -S --noconfirm --needed -- "${yay_pkgs[@]}" || warning "Failed to install packages with 'yay'"
+    else
+        warning "Continuing without 'yay' packages"
+    fi
+fi
