@@ -89,6 +89,7 @@ prepare_disk() {
 install_arch() {
     pacman -Sy --noconfirm archlinux-keyring || error "Failed to reinstall 'archlinux-keyring'"
     pacman -S --noconfirm --needed reflector || error "Failed to install 'reflector'"
+    
     reflector_args=(
         --completion-percent 100
         --country "United States"
@@ -99,23 +100,105 @@ install_arch() {
         --save /etc/pacman.d/mirrorlist
     )
     reflector "${reflector_args[@]}" || error "Failed to run 'reflector'"
+    
     sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf || warning "Failed to enable parallel downloads in 'pacman.conf'"
+    
     pacstrap_pkgs=(
+        7zip
+        alacritty
+        alsa-utils
         amd-ucode
         base
         base-devel
+        bash-completion
+        bat
+        bspwm
+        cups
+        cups-browsed
+        cups-filters
+        cups-pdf
         curl
+        docker
+        docker-compose
+        dunst
         efibootmgr
+        eza
+        fastfetch
+        feh
+        ffmpeg
+        ffmpegthumbnailer
+        file-roller
+        fontconfig
+        fuzzel
+        fzf
+        gammastep
         git
+        gnome-disk-utility
+        gnome-keyring
+        gnome-themes-extra
         grub
+        gvfs
+        imagemagick
+        lazydocker
         less
+        libnautilus-extension
         linux
         linux-firmware
         man-db
         man-pages
+        mpc
+        mpd
+        mpv
+        msedit
         nano
+        ncmpcpp
+        nemo
+        nemo-audio-tab
+        nemo-compare
+        nemo-fileroller
+        nemo-repairer
         networkmanager
+        niri
+        noto-fonts
+        noto-fonts-cjk
+        noto-fonts-emoji
+        papirus-icon-theme
+        picom
+        pipewire
+        pipewire-alsa
+        pipewire-audio
+        pipewire-jack
+        pipewire-pulse
+        playerctl
+        polkit-gnome
+        polybar
+        rofi
+        rsync
+        stow
         sudo
+        swaybg
+        swaylock
+        sxhkd
+        tldr
+        ttf-gohu-nerd
+        ttf-jetbrains-mono
+        unzip
+        vulkan-radeon
+        waybar
+        wayland
+        wget
+        wireplumber
+        wlsunset
+        xclip
+        xdg-desktop-portal-gnome
+        xdg-desktop-portal-gtk
+        xf86-video-amdgpu
+        xorg-server
+        xorg-xauth
+        xorg-xclipboard
+        xorg-xinit
+        xwayland-satellite
+        yt-dlp
     )
     pacstrap -K /mnt "${pacstrap_pkgs[@]}" || error "Failed to install packages with 'pacstrap'"
 }
@@ -124,6 +207,27 @@ configure_arch() {
 	genfstab -U /mnt >> /mnt/etc/fstab || error "Failed to generate fstab"
 	arch-chroot /mnt /bin/bash -s <<- EOF
         error() { echo "[ARCH-CHROOT ERROR] ${1}"; exit 1; }
+        warning() { echo "[ARCH-CHROOT WARNING] ${1}"; }
+        yay_pkgs=(
+            brave-bin
+            librewolf-bin
+            visual-studio-code-bin
+        )
+        install_yay() {
+            git clone https://aur.archlinux.org/yay /tmp/yay || { warning "Failed to clone 'yay' repository"; return 1; }
+            (cd /tmp/yay && makepkg -si --noconfirm) || { warning "Failed to build and install 'yay'"; return 1; }
+            return 0
+        }
+
+        sudo pacman -Sy || error "Failed to synchronize package databases"
+
+        if ! command -v yay; then
+            if install_yay; then
+                yay -S --noconfirm --needed -- "${yay_pkgs[@]}" || warning "Failed to install packages with 'yay'"
+            else
+                warning "Continuing without 'yay' packages"
+            fi
+        fi
 
 		# time
 		ln -sf /usr/share/zoneinfo/"${timezone}" /etc/localtime || error "Failed to set timezone"
