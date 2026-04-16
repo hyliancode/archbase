@@ -19,7 +19,7 @@ fi
 
 if ! command -v yay; then
     if install_yay; then
-        yay -S --noconfirm --needed -- "${yay_pkgs[@]}" || warning "Failed to install packages with 'yay'"
+        [[ -f yay.pkgs ]] && yay -S --noconfirm --needed - < yay.pkgs || warning "Failed to install packages from 'yay.pkgs'"
     else
         warning "Continuing without 'yay' packages"
     fi
