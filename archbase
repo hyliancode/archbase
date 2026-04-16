@@ -2,7 +2,6 @@
 
 warning() { echo "[WARNING] ${1}"; }
 error() { echo "[ERROR] ${1}"; exit 1; }
-confirm() { read -p "${1} (y/N): "; [[ "${REPLY}" =~ [yY] ]]; }
 
 setfont ter-132b || warning "Could not set font"
 
@@ -15,9 +14,10 @@ verify_system() {
 }
 
 get_user_input() {
-    local _username _password _password_confirm
+    local _username
+    local _password _password_confirm
     local _compname # damn linux for making 'hostname' a command
-    local _timezone_label _timezone _timezones
+    local _timezone
     local _disk _partition_suffix
 
     while true; do
@@ -42,30 +42,26 @@ get_user_input() {
         break
     done
 
-    declare -A _timezones=(
-        ["US/Central"]="America/Chicago"
-        ["US/Eastern"]="America/New_York"
-        ["US/Mountain"]="America/Denver"
-        ["US/Pacific"]="America/Los_Angeles"
-        ["UTC"]="Etc/UTC"
-        ["Central Europe"]="Europe/Prague"
-        ["Eastern Europe"]="Europe/Helsinki"
-        ["Western Europe"]="Europe/Berlin"
-        ["Japan"]="Asia/Tokyo"
-    )
-    select _timezone_label in "${!_timezones[@]}"; do
-        [[ -n "${_timezone_label}" ]] || { warning "Must select a timezone"; continue; }
-        _timezone="${_timezones[${_timezone_label}]}"
-        confirm "Timezone: ${_timezone}?" || exit 1
-        break
+    _timezone="$(curl -s -f -m 5 https://ipapi.co/timezone)"
+    while true; do
+        read -r -p "Detected timezone: '${_timezone}'. Is this correct? (Y/n): "
+        case "${REPLY:-Y}" in
+            [Yy]* ) _timezone="${_timezone}" ;;
+            [Nn]* ) _timezone="$(tzselect)" ;;
+        esac
+        if [[ -f "/usr/share/zoneinfo/${_timezone}" ]]; then
+            break
+        else
+            warning "Timezone: '${_timezone:-${REPLY}}' is incorrect"
+        fi
     done
 
     select _disk in $(lsblk -npdo name); do
         [[ -n "${_disk}" ]] || { warning "Must select a drive"; continue; }
         [[ -b "${_disk}" ]] || error "Drive '${_disk}' is not valid"
         [[ "${_disk}" =~ "nvme" ]] && _partition_suffix="p" || _partition_suffix=""
-        confirm "Destroy data on '${_disk}'?" || exit 1
-        break
+        read -p "Destroy data on '${_disk}'? (y/N): "
+        [[ "${REPLY:-N}" =~ [yY] ]] && break || error "Aborted by user"
     done
 
     export username="${_username}"
@@ -127,7 +123,7 @@ install_arch() {
 configure_arch() {
 	genfstab -U /mnt >> /mnt/etc/fstab || error "Failed to generate fstab"
 	arch-chroot /mnt /bin/bash -s <<- EOF
-        error() { echo "[ARCH-CHROOT] [ERROR] ${1}"; exit 1; }
+        error() { echo "[ARCH-CHROOT ERROR] ${1}"; exit 1; }
 
 		# time
 		ln -sf /usr/share/zoneinfo/"${timezone}" /etc/localtime || error "Failed to set timezone"
@@ -166,4 +162,5 @@ prepare_disk
 install_arch
 configure_arch
 
-confirm "Installation complete. Reboot now?" && reboot
+confirm "Installation complete. Reboot now?"
+reboot
