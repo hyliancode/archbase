@@ -159,9 +159,13 @@ configure_arch() {
 }
 
 verify_system
+clear
 get_user_input
+clear
 prepare_disk
+clear
 install_arch
+clear
 configure_arch
 
 read -p "Installation complete. Reboot now? [y/N]: "
