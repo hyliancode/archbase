@@ -1,16 +1,32 @@
 #!/bin/bash
 
-warning() { echo "[WARNING] ${1}"; }
-error() { echo "[ERROR] ${1}"; exit 1; }
+setfont ter-132b
 
-setfont ter-132b || warning "Could not set font"
+error() {
+    echo "${1}"
+    exit 1
+}
 
 verify_system() {
-    [[ -f /usr/bin/pacstrap ]] || error "Not in arch live env"
-    [[ "$(id -u)" == "0" ]] || error "Not running as root"
-    [[ "$(cat /sys/firmware/efi/fw_platform_size)" == "64" ]] || error "Not booted in a supported mode (x64 UEFI)"
-    ping -qn -c 1 ping.archlinux.org &> /dev/null || error "Not internet connection"
-    [[ "$(timedatectl show -p NTPSynchronized --value)" == "yes" ]] || error "System clock is not synchronized"
+    if [[ -f /usr/bin/pacstrap ]]; then
+        error "Not in arch live env"
+    fi
+
+    if [[ "$(id -u)" != "0" ]]; then
+        error "Not running as root"
+    fi
+
+    if [[ "$(cat /sys/firmware/efi/fw_platform_size)" != "64" ]]; then
+        error "Not booted in a supported mode (x64 UEFI)"
+    fi
+
+    if ! ping -qn -c 1 ping.archlinux.org &>/dev/null; then
+        error "Not internet connection"
+    fi
+
+    if [[ "$(timedatectl show -p NTPSynchronized --value)" != "yes" ]]; then
+        error "System clock is not synchronized"
+    fi
 }
 
 get_user_input() {
@@ -22,23 +38,44 @@ get_user_input() {
 
     while true; do
         read -p "Username: " _username
-        [[ -n "${_username}" ]] || { warning "Cannot be blank"; continue; }
-        [[ "${_username}" =~ ^[a-zA-Z0-9]+$ ]] || { warning "No special chars"; continue; }
+        if [[ -z "${_username}" ]]; then
+            echo "Cannot be blank"
+            continue
+        fi
+
+        if [[ ! "${_username}" =~ ^[a-zA-Z0-9]+$ ]]; then
+            echo "No special chars"
+            continue
+        fi
         break
     done
 
     while true; do
         read -p "Password: " _password
-        [[ -n "${_password}" ]] || { warning "Cannot be blank"; continue; }
+        if [[ -z "${_password}" ]]; then
+            echo "Cannot be blank"
+            continue
+        fi
+
         read -p "Confirm: " _password_confirm
-        [[ "${_password}" == "${_password_confirm}" ]] || { warning "Passwords did not match"; continue; }
+        if [[ "${_password}" != "${_password_confirm}" ]]; then
+            echo "Passwords did not match"
+            continue
+        fi
         break
     done
 
     while true; do
         read -p "Computer Name: " _compname
-        [[ -n "${_compname}" ]] || { warning "Cannot be blank"; continue; }
-        [[ "${_compname}" =~ ^[a-zA-Z0-9]+$ ]] || { warning "No special chars"; continue; }
+        if [[ -z "${_compname}" ]]; then
+            echo "Cannot be blank"
+            continue
+        fi
+
+        if [[ ! "${_compname}" =~ ^[a-zA-Z0-9]+$ ]]; then
+            echo "No special chars"
+            continue
+        fi
         break
     done
 
@@ -49,19 +86,37 @@ get_user_input() {
             [Yy]* ) _timezone="${_timezone}" ;;
             [Nn]* ) _timezone="$(tzselect)" ;;
         esac
+
         if [[ -f "/usr/share/zoneinfo/${_timezone}" ]]; then
             break
         else
-            warning "Timezone: '${_timezone:-${REPLY}}' is incorrect"
+            echo "Timezone: '${_timezone:-${REPLY}}' is incorrect"
+            continue
         fi
     done
 
     select _disk in $(lsblk -npdo name); do
-        [[ -n "${_disk}" ]] || { warning "Must select a drive"; continue; }
-        [[ -b "${_disk}" ]] || error "Drive '${_disk}' is not valid"
-        [[ "${_disk}" =~ "nvme" ]] && _partition_suffix="p" || _partition_suffix=""
+        if [[ -z "${_disk}" ]]; then
+            echo "Must select a drive"
+            continue
+        fi
+
+        if [[ ! -b "${_disk}" ]]; then
+            error "Drive '${_disk}' is not valid"
+        fi
+
+        if [[ "${_disk}" =~ "nvme" ]]; then
+            _partition_suffix="p"
+        else
+            _partition_suffix=""
+        fi
+
         read -p "Destroy data on '${_disk}'? (y/N): "
-        [[ "${REPLY:-N}" =~ [yY] ]] && break || error "Aborted by user"
+        if [[ "${REPLY:-N}" =~ [yY] ]]; then
+            break
+        else
+            error "Aborted by user"
+        fi
     done
 
     export username="${_username}"
@@ -74,21 +129,24 @@ get_user_input() {
 }
 
 prepare_disk() {
-    mountpoint -q /mnt && { umount -R /mnt || error "Failed to unmount all in '/mnt'"; }
-    sgdisk -Z "${disk}" || error "Failed to zap disk: '${disk}'"
-    sgdisk -a 2048 -o "${disk}" || error "Failed to set gpt alignment: '${disk}'"
-    sgdisk -n 1::+1GiB --typecode=1:ef00 --change-name=1:'EFIBOOT' "${disk}" || error "Failed to create partition 1: '${disk}'"
-    sgdisk -n 2::-0 --typecode=2:8300 --change-name=2:'ROOT' "${disk}" || error "Failed to create partition 2: '${disk}'"
-    partprobe "${disk}" || error "Failed to run 'partprobe': '${disk}'"
-    mkfs.fat -F 32 "${boot_partition}" || error "Failed to format boot partition: '${boot_partition}'"
-    mkfs.ext4 "${root_partition}" || error "Failed to format root partition: '${root_partition}'"
-    mount "${root_partition}" /mnt || error "Failed to mount '${root_partition}' to '/mnt'"
-    mount --mkdir "${boot_partition}" /mnt/boot || error "Failed to mount '${boot_partition}' to '/mnt/boot'"
-}
+    if mountpoint -q /mnt; then
+        umount -R /mnt
+    fi
+    
+    sgdisk -Z "${disk}"
+    sgdisk -a 2048 -o "${disk}"
+    sgdisk -n 1::+1GiB --typecode=1:ef00 --change-name=1:'EFIBOOT' "${disk}"
+    sgdisk -n 2::-0 --typecode=2:8300 --change-name=2:'ROOT' "${disk}"
+    partprobe "${disk}"
+    mkfs.fat -F 32 "${boot_partition}"
+    mkfs.ext4 "${root_partition}"
+    mount "${root_partition}" /mnt
+    mount --mkdir "${boot_partition}" /mnt/boot
 
 install_arch() {
-    pacman -Sy --noconfirm archlinux-keyring || error "Failed to reinstall 'archlinux-keyring'"
-    pacman -S --noconfirm --needed reflector || error "Failed to install 'reflector'"
+    pacman -Sy --noconfirm archlinux-keyring
+    pacman -S --noconfirm --needed reflector
+    
     reflector_args=(
         --completion-percent 100
         --country "United States"
@@ -98,8 +156,11 @@ install_arch() {
         --sort rate
         --save /etc/pacman.d/mirrorlist
     )
-    reflector "${reflector_args[@]}" || error "Failed to run 'reflector'"
-    sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf || warning "Failed to enable parallel downloads in 'pacman.conf'"
+    
+    reflector "${reflector_args[@]}"
+    
+    sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf
+    
     pacstrap_pkgs=(
         amd-ucode
         base
@@ -116,57 +177,55 @@ install_arch() {
         networkmanager
         sudo
     )
-    pacstrap -K /mnt "${pacstrap_pkgs[@]}" || error "Failed to install packages with 'pacstrap'"
+    
+    pacstrap -K /mnt "${pacstrap_pkgs[@]}"
 }
 
 configure_arch() {
-    cp -r ./archsetup /mnt/etc/skel/archsetup || warning "Failed to copy 'archsetup' to '/etc/skel'"
-	genfstab -U /mnt >> /mnt/etc/fstab || error "Failed to generate fstab"
-	arch-chroot /mnt /bin/bash -s <<- EOF
-        error() { echo "[ARCH-CHROOT ERROR] ${1}"; exit 1; }
-        warning() { echo "[ARCH-CHROOT WARNING] ${1}"; }
-
-		# time
-		ln -sf /usr/share/zoneinfo/"${timezone}" /etc/localtime || error "Failed to set timezone"
-		hwclock --systohc || error "Failed to set hardware clock"
+    cp -r ./archsetup /mnt/etc/skel/archsetup
+	
+    genfstab -U /mnt >> /mnt/etc/fstab
+	
+    arch-chroot /mnt /bin/bash -s <<- EOF
+        # time
+		ln -sf /usr/share/zoneinfo/"${timezone}" /etc/localtime
+		hwclock --systohc
 
 		# localization
-		sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen || error "Failed to uncomment 'en_US.UTF-8' in 'locale.gen'"
-		locale-gen || error "Failed to generate locales"
-		echo "LANG=en_US.UTF-8" > /etc/locale.conf || error "Failed to set 'LANG' in 'locale.conf'"
+		sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+		locale-gen
+		echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
 		# network config
-		echo "${compname}" > /etc/hostname || error "Failed to set hostname"
-		systemctl enable NetworkManager.service || error "Failed to enable 'NetworkManager.service'"
+		echo "${compname}" > /etc/hostname
+		systemctl enable NetworkManager.service
 
 		# install bootloader
-		grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB || error "Failed to install GRUB"
-		sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="[^"]*/& quiet /' /etc/default/grub || error "Failed to modify GRUB configuration"
-		grub-mkconfig -o /boot/grub/grub.cfg || error "Failed to generate GRUB configuration"
-		efibootmgr -c -d "${disk}" -p 1 -L "Arch Linux" -l /EFI/GRUB/grubx64.efi || error "Failed to create EFI boot entry"
+		grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+		sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="[^"]*/& quiet /' /etc/default/grub
+		grub-mkconfig -o /boot/grub/grub.cfg
+		efibootmgr -c -d "${disk}" -p 1 -L "Arch Linux" -l /EFI/GRUB/grubx64.efi
 
 		# setup user account
-		useradd -m -G wheel -s /bin/bash "${username}" || error "Failed to create user '${username}'"
-		echo "${username}:${password}" | chpasswd || error "Failed to set password for user '${username}'"
-		sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf || error "Failed to enable parallel downloads in 'pacman.conf'"
-		sed -i 's/^#Color/Color\nILoveCandy/' /etc/pacman.conf || error "Failed to enable easter egg colors in 'pacman.conf'"
-		sed -i '/#\[multilib\]/,/#Include = \/etc\/pacman.d\/mirrorlist/ s/^#//' /etc/pacman.conf || error "Failed to uncomment 'multilib' section in 'pacman.conf'"
-		sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers || error "Failed to uncomment 'wheel' group in 'sudoers'"
-		sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers || error "Failed to uncomment 'wheel' group in 'sudoers'"
-        rm -rf /etc/skel/archsetup || warning "Failed to remove 'archsetup' from '/etc/skel'"
+		useradd -m -G wheel -s /bin/bash "${username}"
+		echo "${username}:${password}" | chpasswd
+		sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf
+		sed -i 's/^#Color/Color\nILoveCandy/' /etc/pacman.conf
+		sed -i '/#\[multilib\]/,/#Include = \/etc\/pacman.d\/mirrorlist/ s/^#//' /etc/pacman.conf
+		sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers
+		sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+        rm -rf /etc/skel/archsetup
 		exit
 	EOF
 }
 
 verify_system
-clear
 get_user_input
-clear
 prepare_disk
-clear
 install_arch
-clear
 configure_arch
 
 read -p "Installation complete. Reboot now? [y/N]: "
-[[ "${REPLY:-N}" =~ ^[Yy] ]] && reboot
+if [[ "${REPLY:-NO}" =~ ^[Yy] ]]; then
+    systemctl reboot
+fi
