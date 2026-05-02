@@ -188,9 +188,9 @@ install_arch() {
 
 configure_arch() {
     cp -r ./archsetup /mnt/etc/skel/archsetup
-	
+
     genfstab -U /mnt >> /mnt/etc/fstab
-	
+    
     arch-chroot /mnt /bin/bash -s <<- EOF
         # time
 		ln -sf /usr/share/zoneinfo/"${timezone}" /etc/localtime
