@@ -222,11 +222,11 @@ configure_arch() {
         rm -rf /etc/skel/archsetup
 
         # zram config file
-        cat <<- Z_EOF > /etc/systemd/zram-generator.conf
+        cat <<- ZEOF > /etc/systemd/zram-generator.conf
             [zram0]
             zram-size = min(ram / 2, 4096)
             compression-algorithm = zstd
-        Z_EOF
+        ZEOF
 
 		exit
 	EOF
