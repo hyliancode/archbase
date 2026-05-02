@@ -2,30 +2,30 @@
 
 setfont ter-132b
 
-error() {
-    echo "${1}"
-    exit 1
-}
-
 verify_system() {
-    if [[ -f /usr/bin/pacstrap ]]; then
-        error "Not in arch live env"
+    if [[ ! -f /usr/bin/pacstrap ]]; then
+        echo "Not in arch live env"
+        exit 1
     fi
 
     if [[ "$(id -u)" != "0" ]]; then
-        error "Not running as root"
+        echo "Not running as root"
+        exit 1
     fi
 
     if [[ "$(cat /sys/firmware/efi/fw_platform_size)" != "64" ]]; then
-        error "Not booted in a supported mode (x64 UEFI)"
+        echo "Not booted in a supported mode (x64 UEFI)"
+        exit 1
     fi
 
     if ! ping -qn -c 1 ping.archlinux.org &>/dev/null; then
-        error "Not internet connection"
+        echo "No internet connection"
+        exit 1
     fi
 
     if [[ "$(timedatectl show -p NTPSynchronized --value)" != "yes" ]]; then
-        error "System clock is not synchronized"
+        echo "System clock is not synchronized"
+        exit 1
     fi
 }
 
@@ -102,7 +102,8 @@ get_user_input() {
         fi
 
         if [[ ! -b "${_disk}" ]]; then
-            error "Drive '${_disk}' is not valid"
+            echo "Drive '${_disk}' is not valid"
+            exit 1
         fi
 
         if [[ "${_disk}" =~ "nvme" ]]; then
@@ -115,7 +116,8 @@ get_user_input() {
         if [[ "${REPLY:-N}" =~ [yY] ]]; then
             break
         else
-            error "Aborted by user"
+            echo "Aborted by user"
+            exit 0
         fi
     done
 
@@ -142,6 +144,7 @@ prepare_disk() {
     mkfs.ext4 "${root_partition}"
     mount "${root_partition}" /mnt
     mount --mkdir "${boot_partition}" /mnt/boot
+}
 
 install_arch() {
     pacman -Sy --noconfirm archlinux-keyring
@@ -176,6 +179,8 @@ install_arch() {
         nano
         networkmanager
         sudo
+        zram-generator
+        zstd
     )
     
     pacstrap -K /mnt "${pacstrap_pkgs[@]}"
@@ -215,6 +220,14 @@ configure_arch() {
 		sed -i 's/^# %wheel ALL=(ALL) ALL/%wheel ALL=(ALL) ALL/' /etc/sudoers
 		sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
         rm -rf /etc/skel/archsetup
+
+        # zram config file
+        cat <<- Z_EOF > /etc/systemd/zram-generator.conf
+            [zram0]
+            zram-size = min(ram / 2, 4096)
+            compression-algorithm = zstd
+        Z_EOF
+
 		exit
 	EOF
 }

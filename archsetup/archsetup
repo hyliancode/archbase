@@ -1,26 +1,35 @@
 #!/bin/bash
 
-error() { echo "[ERROR] ${1}"; exit 1; }
-warning() { echo "[WARNING] ${1}"; }
-
 install_yay() {
-    git clone https://aur.archlinux.org/yay /tmp/yay || { warning "Failed to clone 'yay' repository"; return 1; }
-    (cd /tmp/yay && makepkg -si --noconfirm) || { warning "Failed to build and install 'yay'"; return 1; }
-    return 0
+    if ! git clone https://aur.archlinux.org/yay /tmp/yay; then
+        echo "Failed to clone 'yay' repository"
+        return 1
+    elif ! (cd /tmp/yay && makepkg -si --noconfirm); then
+        echo "Failed 'makepkg' for 'yay'"
+        return 1
+    else
+        return 0
+    fi
 }
 
-sudo pacman -Sy || error "Failed to synchronize package databases"
+sudo pacman -Sy
 
 if [[ -f pacman.pkgs ]]; then
-    sudo pacman -S --noconfirm --needed - < pacman.pkgs || error "Failed to install packages from 'pacman.pkgs'"
+    sudo pacman -S --noconfirm --needed - < pacman.pkgs
 else
-    warning "No 'pacman.pkgs' file found. Skipping 'pacman' package installation."
+    echo "No 'pacman.pkgs' file found. Skipping 'pacman' package installation."
 fi  
 
-if ! command -v yay; then
-    if install_yay; then
-        [[ -f yay.pkgs ]] && yay -S --noconfirm --needed - < yay.pkgs || warning "Failed to install packages from 'yay.pkgs'"
-    else
-        warning "Continuing without 'yay' packages"
+if command -v yay 1>/dev/null; then
+    echo "Already installed: 'yay'"
+else
+    if ! install_yay; then
+        echo "Failed to install: 'yay'"
     fi
+fi
+
+if [[ -f yay.pkgs ]]; then
+    yay -S --noconfirm --needed - < yay.pkgs
+else
+    echo "No 'yay.pkgs' file found. Skipping 'yay' package installation."
 fi
