@@ -12,6 +12,14 @@ install_yay() {
     fi
 }
 
+install_yay_pkgs() {
+    if [[ -f yay.pkgs ]]; then
+        yay -S --noconfirm --needed - < yay.pkgs
+    else
+        echo "No 'yay.pkgs' file found. Skipping 'yay' package installation."
+    fi
+fi
+
 sudo pacman -Sy
 
 if [[ -f pacman.pkgs ]]; then
@@ -22,14 +30,11 @@ fi
 
 if command -v yay 1>/dev/null; then
     echo "Already installed: 'yay'"
+    install_yay_pkgs
 else
     if ! install_yay; then
         echo "Failed to install: 'yay'"
+    else
+        install_yay_pkgs
     fi
-fi
-
-if [[ -f yay.pkgs ]]; then
-    yay -S --noconfirm --needed - < yay.pkgs
-else
-    echo "No 'yay.pkgs' file found. Skipping 'yay' package installation."
 fi
